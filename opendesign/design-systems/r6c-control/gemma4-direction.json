@@ -1,0 +1,43 @@
+{
+  "source": "local oMLX gemma-4-e4b-it-4bit",
+  "generated": "2026-06-28T00:29:19+08:00",
+  "direction": {
+    "palette": {
+      "bg_primary": "#121212",
+      "bg_secondary": "#242424",
+      "fg_text": "#E0E0E0",
+      "accent_active": "#FF9800",
+      "status_success": "#4CAF50",
+      "status_warning": "#FFC107",
+      "status_critical": "#B00020"
+    },
+    "type": {
+      "aesthetic": "Operational_Monochrome",
+      "rendering_style": "High_Density_Data_View",
+      "ui_philosophy": "Low_Latency_Control",
+      "font_suggestion": "SFMono-for-Text / SF Pro"
+    },
+    "layout": {
+      "structure": "Fixed_Control_Panel",
+      "information_flow": "Top_Status_Bar / Mid_Controls / Bottom_Logs",
+      "control_grouping": ["Connection", "Display_Control", "Advanced_System"],
+      "action_placement": "One_Click_Primary_Targets"
+    },
+    "states": {
+      "connected": "Live_Stream_Active",
+      "disconnected": "Awaiting_Connection",
+      "initializing": "Establishing_Link",
+      "adb_pending": "Auth_Required",
+      "error": "Critical_Failure",
+      "idle": "Monitoring_Passive"
+    },
+    "labels": {
+      "start_scrcpy": "Connect",
+      "stop_scrcpy": "Disconnect",
+      "adb_authorize": "Authorize ADB",
+      "display_reset": "Display Reset",
+      "web_fallback": "Web View",
+      "log_feed": "System Feed"
+    }
+  }
+}

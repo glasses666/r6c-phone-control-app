@@ -1,0 +1,48 @@
+{
+  "generated": "2026-06-28T00:48:46+08:00",
+  "sections": [
+    {
+      "id": "mockups",
+      "label": "Mockups",
+      "groups": [
+        {
+          "slug": "r6c-phone-control",
+          "files": [
+            {
+              "label": "index.html",
+              "path": "mockups/r6c-phone-control/index.html"
+            }
+          ]
+        },
+        {
+          "slug": "r6c-phone-control-gemma4-autonomous",
+          "files": [
+            {
+              "label": "index.html",
+              "path": "mockups/r6c-phone-control-gemma4-autonomous/index.html"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "design-systems",
+      "label": "Design Systems",
+      "groups": [
+        {
+          "slug": "r6c-control",
+          "files": [
+            {
+              "label": "colors_and_type.css",
+              "path": "design-systems/r6c-control/colors_and_type.css"
+            },
+            {
+              "label": "gemma4-direction.json",
+              "path": "design-systems/r6c-control/gemma4-direction.json"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

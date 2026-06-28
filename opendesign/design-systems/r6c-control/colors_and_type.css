@@ -1,0 +1,17 @@
+:root {
+  --r6c-bg: #121212;
+  --r6c-panel: #1e1e1e;
+  --r6c-panel-raised: #282827;
+  --r6c-control: #323230;
+  --r6c-line: #4d4d48;
+  --r6c-text: #e0e0da;
+  --r6c-muted: #9a9a91;
+  --r6c-active: #ff9800;
+  --r6c-success: #4caf50;
+  --r6c-warning: #ffc107;
+  --r6c-critical: #c2212e;
+  --r6c-info: #8ca1a8;
+  --r6c-radius: 8px;
+  --r6c-font: ui-rounded, "SF Pro Rounded", "SF Pro Display", -apple-system, BlinkMacSystemFont, sans-serif;
+  --r6c-mono: "SF Mono", Menlo, Consolas, monospace;
+}

@@ -1,0 +1,10 @@
+.build/
+dist/
+.DS_Store
+*.xcuserdata/
+*.swiftpm/
+
+# Generated design/probe artifacts.
+verification/
+gemma-app-ui/
+opendesign/mockups/
