@@ -19,6 +19,7 @@ cp "$PROJECT_DIR/.build/release/$EXECUTABLE" "$MACOS/$APP_NAME"
 cp "$PROJECT_DIR/Scripts/r6c-phone-control.sh" "$RESOURCES/r6c-phone-control.sh"
 cp "$PROJECT_DIR/Scripts/start-scrcpy-r6c.sh" "$RESOURCES/start-scrcpy-r6c.sh"
 cp "$PROJECT_DIR/Scripts/adb-r6c.py" "$RESOURCES/adb-r6c.py"
+cp "$PROJECT_DIR/Resources/AppIcon.icns" "$RESOURCES/AppIcon.icns"
 for server in \
   /opt/homebrew/share/scrcpy/scrcpy-server \
   /usr/local/share/scrcpy/scrcpy-server \
@@ -43,6 +44,8 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
   <string>R6C Phone Control</string>
   <key>CFBundleIdentifier</key>
   <string>local.dracoglasser.r6c-phone-control</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>

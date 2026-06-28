@@ -1,5 +1,7 @@
 # R6C Phone Control
 
+<img src="docs/media/r6c-phone-control-icon.png" alt="R6C Phone Control icon" width="128">
+
 A small macOS app for controlling an Android phone that is attached to a remote
 Linux host over SSH.
 
