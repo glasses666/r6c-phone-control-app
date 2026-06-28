@@ -1,0 +1,5 @@
+<provider
+    android:name="im.angry.openeuicc.cli.EuiccCliProvider"
+    android:authorities="${applicationId}.cli"
+    android:exported="true"
+    android:permission="android.permission.DUMP" />

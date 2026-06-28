@@ -19,7 +19,7 @@ switching.
 - View the phone through an embedded scrcpy H.264 stream.
 - Tap, drag, and use bounded two-finger horizontal trackpad swipes on the phone view.
 - Send Android key events, text input, wake/sleep commands, and display reset/fast-mode commands.
-- List and switch EasyEUICC profiles through the remote helper script.
+- List and switch EasyEUICC profiles through a direct EasyEUICC CLI provider.
 
 ## Setup
 
@@ -45,6 +45,29 @@ CLI profile readout:
 ```sh
 Scripts/r6c-phone-control.sh profiles-json
 ```
+
+EasyEUICC switching is intentionally not screenshot/OCR/UIAutomator based. The
+remote helper calls a DUMP-protected provider inside EasyEUICC:
+
+```sh
+adb shell content read --uri content://im.angry.easyeuicc.cli/profiles.json
+adb shell content read --uri 'content://im.angry.easyeuicc.cli/switch.json?target=Saily'
+adb shell content read --uri 'content://im.angry.easyeuicc.cli/switch-iccid/8985201234567890123'
+```
+
+The provider source and manifest snippet are in
+`android/easyeuicc-cli-provider/`. Patch an OpenEUICC/EasyEUICC checkout with:
+
+```sh
+git clone https://github.com/estkme-group/openeuicc.git /tmp/openeuicc
+android/easyeuicc-cli-provider/patch-openeuicc.sh /tmp/openeuicc --build-debug
+adb install -r /tmp/openeuicc/app-unpriv/build/outputs/apk/debug/app-unpriv-debug.apk
+```
+
+The app prefers `switch-iccid` when EasyEUICC reports an ICCID, so duplicate
+profile names and providers do not collide. If the installed EasyEUICC package
+does not contain this provider, the scripts fail closed instead of falling back
+to visual recognition or coordinate tapping.
 
 ## Build
 

@@ -8,3 +8,4 @@ dist/
 verification/
 gemma-app-ui/
 opendesign/mockups/
+.tmp/

@@ -23,19 +23,33 @@ final class LineParserTests: XCTestCase {
 
     func testParsesProfileLines() {
         let profiles = R6CLineParser.profiles("""
-        PROFILE name="Personal EU" state="已禁用" provider="Club"
-        PROFILE name="Travel US" state="已启用" provider="Saily"
+        PROFILE name="Personal EU" state="已禁用" provider="Club" iccid="8985201111111111111"
+        PROFILE name="Travel US" state="已启用" provider="Saily" iccid="8985202222222222222"
         """)
 
         XCTAssertEqual(profiles.map(\.provider), ["Club", "Saily"])
+        XCTAssertEqual(profiles.map(\.iccid), ["8985201111111111111", "8985202222222222222"])
         XCTAssertFalse(profiles[0].isEnabled)
         XCTAssertTrue(profiles[1].isEnabled)
     }
 
-    func testProfileSwitchArgumentsUseExactIdentity() {
+    func testProfileSwitchArgumentsPreferIccid() {
+        let profile = Profile(name: "Travel Japan", state: "已禁用", provider: "Saily", iccid: "8985201234567890123")
+
+        XCTAssertEqual(profile.switchArguments, ["switch-iccid", "8985201234567890123"])
+    }
+
+    func testProfileSwitchArgumentsUseExactIdentityWhenIccidIsMissing() {
         let profile = Profile(name: "Travel Japan", state: "已禁用", provider: "Saily")
 
         XCTAssertEqual(profile.switchArguments, ["switch-exact", "Travel Japan", "Saily"])
+    }
+
+    func testProfilesUseIccidAsIdentityWhenAvailable() {
+        let first = Profile(name: "Travel Japan", state: "已禁用", provider: "Saily", iccid: "8985201111111111111")
+        let duplicateName = Profile(name: "Travel Japan", state: "已启用", provider: "Saily", iccid: "8985202222222222222")
+
+        XCTAssertEqual(Profile.ambiguousIdentityKeys(in: [first, duplicateName]), [])
     }
 
     func testProfilesReportAmbiguousSwitchIdentity() {
@@ -47,10 +61,11 @@ final class LineParserTests: XCTestCase {
     }
 
     func testProfileFilterSearchesVisibleIdentityFields() {
-        let saily = Profile(name: "Travel Japan", state: "已禁用", provider: "Saily")
+        let saily = Profile(name: "Travel Japan", state: "已禁用", provider: "Saily", iccid: "8985201234567890123")
         let club = Profile(name: "Work US", state: "已启用", provider: "Club")
 
         XCTAssertEqual(ProfileFilter.apply([saily, club], query: "sail"), [saily])
+        XCTAssertEqual(ProfileFilter.apply([saily, club], query: "90123"), [saily])
         XCTAssertEqual(ProfileFilter.apply([saily, club], query: "启用"), [club])
         XCTAssertEqual(ProfileFilter.apply([saily, club], query: " "), [saily, club])
     }

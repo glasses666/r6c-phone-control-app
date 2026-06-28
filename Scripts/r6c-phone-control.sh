@@ -606,6 +606,16 @@ cmd_switch_exact() {
   SSH_TIMEOUT=240 ssh_r6c "R6C_ANDROID_SERIAL=$(shell_quote "$serial") /root/r6c-sim-switch/switch-euicc.sh switch-exact $(shell_quote "$name") $(shell_quote "$provider") 2>&1"
 }
 
+cmd_switch_iccid() {
+  iccid="${1:-}"
+  [ -n "$iccid" ] || {
+    echo "ERROR missing profile ICCID" >&2
+    exit 2
+  }
+  serial="$(require_serial)"
+  SSH_TIMEOUT=240 ssh_r6c "R6C_ANDROID_SERIAL=$(shell_quote "$serial") /root/r6c-sim-switch/switch-euicc.sh switch-iccid $(shell_quote "$iccid") 2>&1"
+}
+
 cmd_web_open() {
   url="$(read_web_url)"
   [ -n "$url" ] || {
@@ -653,11 +663,12 @@ case "${1:-status}" in
   authorize) cmd_authorize ;;
   switch) shift; cmd_switch "${1:-}" ;;
   switch-exact) shift; cmd_switch_exact "${1:-}" "${2:-}" ;;
+  switch-iccid) shift; cmd_switch_iccid "${1:-}" ;;
   open-web) cmd_web_open ;;
   start-web) cmd_web_start ;;
   display) shift; cmd_display "${1:-status}" ;;
   *)
-    echo "Usage: $0 status|adb-status|devices|profiles|profiles-json|screen-capture [path]|start-stream [frame.jpg]|h264-stream|stop-h264-stream|scrcpy-control-stream|scrcpy-embedded-stream|stop-scrcpy-embedded-stream|stop-stream|stop-input|stop-input-all|tap <x y>|swipe <x1 y1 x2 y2 [ms]>|keyevent <name>|stayon <true|false>|text <value>|start-scrcpy [x y w h]|stop-scrcpy|dock-scrcpy <x y w h>|authorize|switch <target>|switch-exact <name> <provider>|open-web|start-web|display <fast|reset|status>" >&2
+    echo "Usage: $0 status|adb-status|devices|profiles|profiles-json|screen-capture [path]|start-stream [frame.jpg]|h264-stream|stop-h264-stream|scrcpy-control-stream|scrcpy-embedded-stream|stop-scrcpy-embedded-stream|stop-stream|stop-input|stop-input-all|tap <x y>|swipe <x1 y1 x2 y2 [ms]>|keyevent <name>|stayon <true|false>|text <value>|start-scrcpy [x y w h]|stop-scrcpy|dock-scrcpy <x y w h>|authorize|switch <target>|switch-exact <name> <provider>|switch-iccid <iccid>|open-web|start-web|display <fast|reset|status>" >&2
     exit 2
     ;;
 esac

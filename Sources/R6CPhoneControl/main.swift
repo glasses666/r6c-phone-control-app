@@ -11,6 +11,14 @@ struct Profile: Identifiable, Equatable {
     let name: String
     let state: String
     let provider: String
+    let iccid: String
+
+    init(name: String, state: String, provider: String, iccid: String = "") {
+        self.name = name
+        self.state = state
+        self.provider = provider
+        self.iccid = iccid
+    }
 
     var isEnabled: Bool {
         state.localizedCaseInsensitiveContains("enabled") || state.contains("已启用")
@@ -21,11 +29,28 @@ struct Profile: Identifiable, Equatable {
     }
 
     var switchArguments: [String] {
-        ["switch-exact", name, provider]
+        if !iccid.isEmpty {
+            return ["switch-iccid", iccid]
+        }
+        return ["switch-exact", name, provider]
     }
 
     var identityKey: String {
-        "\(name)\t\(provider)"
+        if !iccid.isEmpty {
+            return "iccid:\(iccid)"
+        }
+        return "\(name)\t\(provider)"
+    }
+
+    var detail: String {
+        let base = provider.isEmpty ? state : "\(provider) - \(state)"
+        guard !iccid.isEmpty else { return base }
+        return "\(base) - ICCID \(maskedICCID)"
+    }
+
+    private var maskedICCID: String {
+        guard iccid.count > 6 else { return iccid }
+        return "..." + iccid.suffix(6)
     }
 
     static func ambiguousIdentityKeys(in profiles: [Profile]) -> Set<String> {
@@ -82,7 +107,8 @@ enum ProfileFilter {
         return profiles.filter {
             $0.name.localizedCaseInsensitiveContains(query) ||
                 $0.provider.localizedCaseInsensitiveContains(query) ||
-                $0.state.localizedCaseInsensitiveContains(query)
+                $0.state.localizedCaseInsensitiveContains(query) ||
+                $0.iccid.localizedCaseInsensitiveContains(query)
         }
     }
 }
@@ -635,13 +661,14 @@ enum R6CLineParser {
     }
 
     static func profiles(_ output: String) -> [Profile] {
-        output.split(separator: "\n").compactMap { rawLine in
+        output.split(separator: "\n").compactMap { rawLine -> Profile? in
             let line = String(rawLine)
             guard line.hasPrefix("PROFILE ") else { return nil }
             return Profile(
                 name: extract("name", from: line),
                 state: extract("state", from: line),
-                provider: extract("provider", from: line)
+                provider: extract("provider", from: line),
+                iccid: extract("iccid", from: line)
             )
         }
     }
@@ -2410,7 +2437,7 @@ struct ProfileRow: View {
                     Text(profile.name)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(profile.isEnabled ? .primary : .secondary)
-                    Text(profile.provider.isEmpty ? profile.state : "\(profile.provider) - \(profile.state)")
+                    Text(profile.detail)
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
@@ -2448,7 +2475,7 @@ struct ProfileRow: View {
                 .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
         )
         .disabled(isAmbiguous)
-        .help(isAmbiguous ? "Multiple eSIM profiles have this same name and provider." : "")
+        .help(isAmbiguous ? "Multiple eSIM profiles have this same name and provider, and no ICCID was reported." : "")
     }
 }
 
