@@ -580,6 +580,11 @@ cmd_profiles() {
   SSH_TIMEOUT=180 ssh_r6c "R6C_ANDROID_SERIAL=$(shell_quote "$serial") /root/r6c-sim-switch/switch-euicc.sh status 2>&1"
 }
 
+cmd_profiles_json() {
+  serial="$(require_serial)"
+  SSH_TIMEOUT=180 ssh_r6c "R6C_ANDROID_SERIAL=$(shell_quote "$serial") /root/r6c-sim-switch/switch-euicc.sh list-json 2>&1"
+}
+
 cmd_switch() {
   target="${1:-}"
   [ -n "$target" ] || {
@@ -626,6 +631,7 @@ case "${1:-status}" in
   adb-status) adb_status ;;
   devices) cmd_devices ;;
   profiles) cmd_profiles ;;
+  profiles-json) cmd_profiles_json ;;
   screen-capture) shift; cmd_capture_screen "${1:-}" ;;
   start-stream) shift; cmd_start_stream "${1:-}" ;;
   h264-stream) cmd_h264_stream ;;
@@ -651,7 +657,7 @@ case "${1:-status}" in
   start-web) cmd_web_start ;;
   display) shift; cmd_display "${1:-status}" ;;
   *)
-    echo "Usage: $0 status|adb-status|devices|profiles|screen-capture [path]|start-stream [frame.jpg]|h264-stream|stop-h264-stream|scrcpy-control-stream|scrcpy-embedded-stream|stop-scrcpy-embedded-stream|stop-stream|stop-input|stop-input-all|tap <x y>|swipe <x1 y1 x2 y2 [ms]>|keyevent <name>|stayon <true|false>|text <value>|start-scrcpy [x y w h]|stop-scrcpy|dock-scrcpy <x y w h>|authorize|switch <target>|switch-exact <name> <provider>|open-web|start-web|display <fast|reset|status>" >&2
+    echo "Usage: $0 status|adb-status|devices|profiles|profiles-json|screen-capture [path]|start-stream [frame.jpg]|h264-stream|stop-h264-stream|scrcpy-control-stream|scrcpy-embedded-stream|stop-scrcpy-embedded-stream|stop-stream|stop-input|stop-input-all|tap <x y>|swipe <x1 y1 x2 y2 [ms]>|keyevent <name>|stayon <true|false>|text <value>|start-scrcpy [x y w h]|stop-scrcpy|dock-scrcpy <x y w h>|authorize|switch <target>|switch-exact <name> <provider>|open-web|start-web|display <fast|reset|status>" >&2
     exit 2
     ;;
 esac

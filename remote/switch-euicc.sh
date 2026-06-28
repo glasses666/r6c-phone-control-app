@@ -12,11 +12,13 @@ ACTIVITY="${EASYEUICC_ACTIVITY:-im.angry.openeuicc.ui.UnprivilegedMainActivity}"
 XML_FILE="${XML_FILE:-/tmp/r6c-euicc-window.$$.xml}"
 PROFILES_FILE="${PROFILES_FILE:-/tmp/r6c-euicc-profiles.$$.tsv}"
 SCREEN_FILE="${SCREEN_FILE:-/tmp/r6c-euicc-screen.png}"
+REVEAL_ICCIDS="${REVEAL_ICCIDS:-0}"
 
 usage() {
   cat <<'EOF'
 Usage:
   switch-euicc.sh list
+  switch-euicc.sh list-json
   switch-euicc.sh status
   switch-euicc.sh switch <profile-or-provider>
   switch-euicc.sh switch-exact <profile-name> [provider]
@@ -109,11 +111,25 @@ for node in xml:gmatch("<node%s[^>]->") do
     current.state = text
   elseif current and rid:match(":id/provider$") and not current.provider then
     current.provider = text
+  elseif current and rid:match(":id/iccid$") and not current.iccid then
+    current.iccid = text
+  elseif current and rid:match(":id/profile_class$") and not current.profile_class then
+    current.profile_class = text
+  elseif current and rid:match(":id/profile_sequence_number$") and not current.sequence then
+    current.sequence = text
   end
 end
 
 for _, p in ipairs(profiles) do
-  print(table.concat({ p.name or "", p.state or "", p.provider or "", p.menu or "" }, "\t"))
+  print(table.concat({
+    p.name or "",
+    p.state or "",
+    p.provider or "",
+    p.menu or "",
+    p.iccid or "",
+    p.profile_class or "",
+    p.sequence or "",
+  }, "\t"))
 end
 LUA
 }
@@ -121,7 +137,7 @@ LUA
 refresh_profiles() {
   i=0
   while [ "$i" -lt 3 ]; do
-    if dump_ui && extract_profiles; then
+    if dump_ui && reveal_masked_iccids && extract_profiles; then
       return 0
     fi
     sleep 1
@@ -138,10 +154,44 @@ ensure_open() {
 }
 
 print_profiles() {
-  while IFS="$(printf '\t')" read -r name state provider menu; do
+  while IFS="$(printf '\t')" read -r name state provider menu iccid profile_class sequence; do
     [ -n "$name" ] || continue
-    printf 'PROFILE name="%s" state="%s" provider="%s"\n' "$name" "$state" "$provider"
+    printf 'PROFILE name="%s" state="%s" provider="%s" iccid="%s" class="%s" sequence="%s"\n' \
+      "$name" "$state" "$provider" "$iccid" "$profile_class" "$sequence"
   done < "$PROFILES_FILE"
+}
+
+print_profiles_json() {
+  lua - "$PROFILES_FILE" <<'LUA'
+local file = arg[1]
+local function esc(s)
+  return (s or "")
+    :gsub("\\", "\\\\")
+    :gsub('"', '\\"')
+    :gsub("\b", "\\b")
+    :gsub("\f", "\\f")
+    :gsub("\n", "\\n")
+    :gsub("\r", "\\r")
+    :gsub("\t", "\\t")
+end
+
+print("[")
+local first = true
+for line in assert(io.open(file, "r")):lines() do
+  local name, state, provider, menu, iccid, profile_class, sequence =
+    line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t(.*)$")
+  if name and name ~= "" then
+    if not first then print(",") end
+    io.write(string.format(
+      '  {"name":"%s","state":"%s","provider":"%s","iccid":"%s","class":"%s","sequence":"%s"}',
+      esc(name), esc(state), esc(provider), esc(iccid), esc(profile_class), esc(sequence)
+    ))
+    first = false
+  end
+end
+if not first then print() end
+print("]")
+LUA
 }
 
 select_profile() {
@@ -235,6 +285,51 @@ tap_bounds() {
   point="$(center_of_bounds "$1")" || return 1
   set -- $point
   adb_shell input tap "$1" "$2" >/dev/null 2>&1
+}
+
+masked_iccid_bounds() {
+  [ "$REVEAL_ICCIDS" = "1" ] || return 0
+  [ -s "$XML_FILE" ] || return 1
+  lua - "$XML_FILE" <<'LUA'
+local xml_path = arg[1]
+local f = assert(io.open(xml_path, "r"))
+local xml = f:read("*a")
+f:close()
+
+local function attr(node, key)
+  return node:match(key .. '="([^"]*)"') or ""
+end
+
+local function decode(s)
+  return (s or "")
+    :gsub("&quot;", '"')
+    :gsub("&apos;", "'")
+    :gsub("&lt;", "<")
+    :gsub("&gt;", ">")
+    :gsub("&amp;", "&")
+end
+
+for node in xml:gmatch("<node%s[^>]->") do
+  local rid = attr(node, "resource%-id")
+  local text = decode(attr(node, "text"))
+  local bounds = attr(node, "bounds")
+  if rid:match(":id/iccid$") and text:find("•", 1, true) and bounds ~= "" then
+    print(bounds)
+  end
+end
+LUA
+}
+
+reveal_masked_iccids() {
+  [ "$REVEAL_ICCIDS" = "1" ] || return 0
+  bounds_list="$(masked_iccid_bounds || true)"
+  [ -n "$bounds_list" ] || return 0
+  printf '%s\n' "$bounds_list" | while IFS= read -r bounds; do
+    [ -n "$bounds" ] || continue
+    tap_bounds "$bounds" || true
+  done
+  sleep 1
+  dump_ui
 }
 
 dump_screen() {
@@ -603,6 +698,12 @@ case "$cmd" in
     ensure_open
     collect_profiles_all
     print_profiles
+    ;;
+  list-json|json)
+    REVEAL_ICCIDS=1
+    ensure_open
+    collect_profiles_all
+    print_profiles_json
     ;;
   switch)
     [ -n "${2:-}" ] || {

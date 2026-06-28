@@ -40,6 +40,12 @@ export R6C_ANDROID_SERIAL="your-device-serial"
 You can also add the remote from the app UI. The scripts fail closed if no
 remote host is configured.
 
+CLI profile readout:
+
+```sh
+Scripts/r6c-phone-control.sh profiles-json
+```
+
 ## Build
 
 ```sh
