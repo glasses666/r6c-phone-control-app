@@ -138,6 +138,39 @@ The physical LED output pin is not readable over AT; the 3D indicator is labeled
 `Modeled LED` and follows the documented SIM, registration, RAT, and signal
 states instead of pretending to read the lamp electrically.
 
+### DJI IG830 SMS to Bark
+
+The bundled `dji_sms_bark.py` watcher reads only the modem's `SM` inbox. After
+a Bark push succeeds, it archives the message locally and clears that SMS slot
+so the 10-message SIM inbox cannot fill up. The existing `ME` inbox is never
+read or deleted.
+
+Store the Bark endpoint outside the repository:
+
+```sh
+mkdir -p "$HOME/Library/Application Support/R6C Phone Control"
+printf '%s\n' 'R6C_BARK_URL=https://api.day.app/your-key/' \
+  > "$HOME/Library/Application Support/R6C Phone Control/bark.env"
+chmod 600 "$HOME/Library/Application Support/R6C Phone Control/bark.env"
+```
+
+Run one scan or keep watching:
+
+```sh
+"/Applications/R6C Phone Control.app/Contents/Resources/dji_sms_bark.py"
+"/Applications/R6C Phone Control.app/Contents/Resources/dji_sms_bark.py" --watch
+```
+
+Notifications use the Apple Messages icon and combine the sender with the
+active eSIM provider in the title. If `R6C_SMS_PROVIDER` is unset, the watcher
+reads the enabled profile from `lpac` when a message arrives. Archives live in
+`~/Library/Application Support/R6C Phone Control/SMS` on macOS.
+
+The modem itself does not expose a user application runtime. Bark forwarding
+and remote profile switching therefore require a USB host such as the Mac or
+R6C. Powering the DJI module by itself is not enough, even when its PDP session
+is online.
+
 The original repo's USB-identity restore command is retained for recovery. Run
 it only when the module currently enumerates as Quectel `2c7c:0125`:
 

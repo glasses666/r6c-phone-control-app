@@ -3,6 +3,7 @@ dist/
 .DS_Store
 *.xcuserdata/
 *.swiftpm/
+__pycache__/
 
 # Generated design/probe artifacts.
 verification/

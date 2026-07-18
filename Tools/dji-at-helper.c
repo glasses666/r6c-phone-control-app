@@ -1,9 +1,11 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <libusb.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -13,6 +15,7 @@
 #define QUECTEL_PRODUCT_ID 0x0125
 #define DJI_AT_INTERFACE 3
 #define RESPONSE_CAPACITY (256 * 1024)
+#define LOCK_WAIT_MILLISECONDS 10000
 
 typedef struct {
     libusb_context *context;
@@ -26,6 +29,29 @@ static long long monotonic_milliseconds(void) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     return (long long)now.tv_sec * 1000LL + now.tv_nsec / 1000000LL;
+}
+
+static int acquire_process_lock(void) {
+    const char *path = getenv("DJI_AT_LOCK_PATH");
+    if (path == NULL || path[0] == '\0') {
+        path = "/tmp/r6c-dji-at-helper.lock";
+    }
+    int descriptor = open(path, O_CREAT | O_RDWR, 0600);
+    if (descriptor < 0) {
+        fprintf(stderr, "open AT lock: %s\n", strerror(errno));
+        return -1;
+    }
+
+    long long deadline = monotonic_milliseconds() + LOCK_WAIT_MILLISECONDS;
+    while (flock(descriptor, LOCK_EX | LOCK_NB) != 0) {
+        if (errno != EWOULDBLOCK || monotonic_milliseconds() >= deadline) {
+            fprintf(stderr, "DJI AT interface is busy.\n");
+            close(descriptor);
+            return -1;
+        }
+        usleep(50000);
+    }
+    return descriptor;
 }
 
 static int configure_transport(dji_modem *modem, int interface_number) {
@@ -328,8 +354,14 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
+    int lock_descriptor = acquire_process_lock();
+    if (lock_descriptor < 0) {
+        return 3;
+    }
+
     dji_modem modem;
     if (open_modem(&modem) != LIBUSB_SUCCESS) {
+        close(lock_descriptor);
         return 2;
     }
 
@@ -361,5 +393,6 @@ int main(int argc, char **argv) {
     }
 
     close_modem(&modem);
+    close(lock_descriptor);
     return exit_code;
 }

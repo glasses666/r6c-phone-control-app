@@ -29,6 +29,8 @@ cp "$PROJECT_DIR/.build/release/$EXECUTABLE" "$MACOS/$APP_NAME"
 cp "$PROJECT_DIR/Scripts/r6c-phone-control.sh" "$RESOURCES/r6c-phone-control.sh"
 cp "$PROJECT_DIR/Scripts/start-scrcpy-r6c.sh" "$RESOURCES/start-scrcpy-r6c.sh"
 cp "$PROJECT_DIR/Scripts/adb-r6c.py" "$RESOURCES/adb-r6c.py"
+cp "$PROJECT_DIR/Scripts/dji_sms_bark.py" "$RESOURCES/dji_sms_bark.py"
+cp "$PROJECT_DIR/Resources/local.r6c.dji-sms-bark.plist" "$RESOURCES/local.r6c.dji-sms-bark.plist"
 cp "$PROJECT_DIR/remote/switch-euicc.sh" "$RESOURCES/switch-euicc.sh"
 cp "$PROJECT_DIR/android/easyeuicc-app-process-cli/build/euicc-app-process-cli.dex" "$RESOURCES/euicc-app-process-cli.dex"
 cp "$DJI_HELPER" "$RESOURCES/dji-at-helper"
@@ -52,7 +54,7 @@ install_name_tool -change "$LIBUSB_INSTALL_NAME" "@loader_path/../Frameworks/lib
 LPAC_DJI_DRIVER="$RESOURCES/lpac/driver/driver_apdu_dji_usb.dylib"
 LPAC_LIBUSB_INSTALL_NAME="$(otool -L "$LPAC_DJI_DRIVER" | awk '/libusb-1.0.0.dylib/ { print $1; exit }')"
 install_name_tool -change "$LPAC_LIBUSB_INSTALL_NAME" "@loader_path/../../../Frameworks/libusb-1.0.0.dylib" "$LPAC_DJI_DRIVER"
-chmod +x "$MACOS/$APP_NAME" "$RESOURCES/r6c-phone-control.sh" "$RESOURCES/start-scrcpy-r6c.sh" "$RESOURCES/adb-r6c.py" "$RESOURCES/switch-euicc.sh" "$RESOURCES/dji-at-helper" "$RESOURCES/lpac/lpac"
+chmod +x "$MACOS/$APP_NAME" "$RESOURCES/r6c-phone-control.sh" "$RESOURCES/start-scrcpy-r6c.sh" "$RESOURCES/adb-r6c.py" "$RESOURCES/dji_sms_bark.py" "$RESOURCES/switch-euicc.sh" "$RESOURCES/dji-at-helper" "$RESOURCES/lpac/lpac"
 
 cat > "$CONTENTS/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
