@@ -9,3 +9,5 @@ verification/
 gemma-app-ui/
 opendesign/mockups/
 .tmp/
+artifacts/
+android/easyeuicc-app-process-cli/build/

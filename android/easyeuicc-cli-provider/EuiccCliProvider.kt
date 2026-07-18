@@ -14,6 +14,8 @@ import im.angry.openeuicc.util.switchProfile
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import net.typeblog.lpac_jni.ProfileDownloadInput
+import net.typeblog.lpac_jni.ProfileDownloadState
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -31,6 +33,16 @@ class EuiccCliProvider : ContentProvider() {
         val displayName: String,
         val provider: String,
         val profileClass: String
+    )
+
+    private data class CliChannel(val slotId: Int, val portId: Int, val seId: Int)
+
+    private data class ActivationCode(
+        val raw: String,
+        val address: String,
+        val matchingId: String?,
+        val oid: String?,
+        val confirmationCodeRequired: Boolean
     )
 
     private val app: OpenEuiccApplication
@@ -71,6 +83,8 @@ class EuiccCliProvider : ContentProvider() {
             val data = when (targetUri.lastPathSegment) {
                 "profiles.txt" -> profilesText()
                 "profiles.json" -> profilesJson().toString(2) + "\n"
+                "download-dry-run.json" -> downloadFromUri(targetUri, dryRun = true).toString(2) + "\n"
+                "download.json" -> downloadFromUri(targetUri, dryRun = false).toString(2) + "\n"
                 else -> switchFromUri(targetUri).toString(2) + "\n"
             }
             ParcelFileDescriptor.AutoCloseOutputStream(output).use {
@@ -84,6 +98,7 @@ class EuiccCliProvider : ContentProvider() {
             "list" -> JSONObject().put("ok", true).put("profiles", profilesJson())
             "switch" -> switchProfileByTarget(arg.orEmpty())
             "switch-iccid" -> switchProfileByIccid(arg.orEmpty())
+            "download-dry-run" -> downloadProfile(arg.orEmpty(), null, dryRun = true, confirmed = false)
             else -> errorJson("unknown method: $method")
         }
         return Bundle().apply { putString("json", result.toString()) }
@@ -103,6 +118,61 @@ class EuiccCliProvider : ContentProvider() {
             )
             else -> errorJson("unknown path: ${uri.path}")
         }
+
+    private fun downloadFromUri(uri: Uri, dryRun: Boolean): JSONObject =
+        downloadProfile(
+            uri.getQueryParameter("activationCode") ?: uri.getQueryParameter("code").orEmpty(),
+            uri.getQueryParameter("confirmationCode"),
+            dryRun,
+            uri.getBooleanQueryParameter("confirm", false)
+        )
+
+    private fun downloadProfile(
+        rawActivationCode: String,
+        confirmationCode: String?,
+        dryRun: Boolean,
+        confirmed: Boolean
+    ): JSONObject {
+        val activation = parseActivationCode(rawActivationCode)
+        val parsed = activation.toJson()
+        if (dryRun) {
+            return JSONObject().put("ok", true).put("dryRun", true).put("activation", parsed)
+        }
+        if (!confirmed) {
+            return errorJson("download requires confirm=true").put("activation", parsed)
+        }
+        if (activation.confirmationCodeRequired && confirmationCode.isNullOrBlank()) {
+            return errorJson("confirmation code required").put("activation", parsed)
+        }
+
+        val channelId = firstChannel()
+        val states = JSONArray()
+        return runBlocking {
+            val manager = app.appContainer.euiccChannelManager
+            manager.withEuiccChannel(
+                channelId.slotId,
+                channelId.portId,
+                EuiccChannel.SecureElementId.createFromInt(channelId.seId)
+            ) { channel ->
+                channel.lpa.downloadProfile(
+                    ProfileDownloadInput(
+                        activation.address,
+                        activation.matchingId,
+                        null,
+                        confirmationCode?.ifBlank { null }
+                    )
+                ) { state ->
+                    states.put(state.javaClass.simpleName)
+                    state !is ProfileDownloadState.ConfirmingDownload || confirmed
+                }
+            }
+            JSONObject()
+                .put("ok", true)
+                .put("message", "downloaded")
+                .put("activation", parsed)
+                .put("states", states)
+        }
+    }
 
     private fun profiles(): List<CliProfile> = runBlocking {
         val manager = app.appContainer.euiccChannelManager
@@ -131,6 +201,20 @@ class EuiccCliProvider : ContentProvider() {
             }
         }
         result
+    }
+
+    private fun firstChannel(): CliChannel = runBlocking {
+        val manager = app.appContainer.euiccChannelManager
+        var result: CliChannel? = null
+        manager.flowInternalEuiccPorts().collect { (slotId, portId) ->
+            if (result != null) return@collect
+            manager.flowEuiccSecureElements(slotId, portId).collect { seId ->
+                if (result == null) {
+                    result = CliChannel(slotId, portId, seId.id)
+                }
+            }
+        }
+        result ?: throw IllegalStateException("no eUICC channel found")
     }
 
     private fun profilesJson(): JSONArray =
@@ -242,6 +326,39 @@ class EuiccCliProvider : ContentProvider() {
 
     private fun errorJson(message: String): JSONObject =
         JSONObject().put("ok", false).put("error", message)
+
+    private fun parseActivationCode(input: String): ActivationCode {
+        val decoded = Uri.decode(input).trim()
+        val lpaText = if (decoded.startsWith("LPA:", ignoreCase = true)) {
+            decoded
+        } else {
+            Regex("(?i)LPA:1\\$[^\\s&\"'<>]+").find(decoded)?.value ?: decoded
+        }
+        val token = if (lpaText.startsWith("LPA:", ignoreCase = true)) lpaText.substring(4) else lpaText
+        val parts = token.split('$').map { it.trim() }
+        require(parts.getOrNull(0) == "1") { "Invalid AC_Format" }
+        val address = requireNotNull(parts.getOrNull(1)?.ifBlank { null }) { "SM-DP+ is required" }
+        val matchingId = parts.getOrNull(2)?.ifBlank { null }
+        val oid = parts.getOrNull(3)?.ifBlank { null }
+        val confirmationCodeRequired = parts.getOrNull(4) == "1"
+        val normalizedParts = mutableListOf("1", address, matchingId.orEmpty(), oid.orEmpty())
+        if (confirmationCodeRequired) normalizedParts += "1"
+        return ActivationCode(
+            raw = "LPA:" + normalizedParts.joinToString("$").trimEnd('$'),
+            address = address,
+            matchingId = matchingId,
+            oid = oid,
+            confirmationCodeRequired = confirmationCodeRequired
+        )
+    }
+
+    private fun ActivationCode.toJson(): JSONObject =
+        JSONObject()
+            .put("activationCode", raw)
+            .put("smdpAddress", address)
+            .put("matchingId", matchingId ?: JSONObject.NULL)
+            .put("oid", oid ?: JSONObject.NULL)
+            .put("confirmationCodeRequired", confirmationCodeRequired)
 
     private fun CliProfile.toJson(): JSONObject =
         JSONObject()

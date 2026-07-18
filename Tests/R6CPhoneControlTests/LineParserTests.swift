@@ -1,7 +1,140 @@
+import Foundation
 import XCTest
 @testable import R6CPhoneControl
 
 final class LineParserTests: XCTestCase {
+    @MainActor
+    func testDJIProfileRoundTripOnConnectedHardware() async throws {
+        guard ProcessInfo.processInfo.environment["R6C_DJI_INTEGRATION"] == "1" else {
+            throw XCTSkip("Set R6C_DJI_INTEGRATION=1 with a DJI IG830 attached to run this test.")
+        }
+
+        let model = AppModel()
+        await model.refreshDJIStatus()
+        XCTAssertTrue(model.djiSnapshot.isConnected, model.djiLog)
+
+        await model.refreshDJIProfiles()
+        let original = try XCTUnwrap(model.djiProfiles.first(where: \.isEnabled))
+        let alternate = try XCTUnwrap(model.djiProfiles.first {
+            !$0.isEnabled && $0.provider.localizedCaseInsensitiveContains("Saily")
+        })
+
+        model.switchDJIProfile(alternate)
+        let alternateFinished = await waitForDJIProfileOperation(model)
+        XCTAssertTrue(alternateFinished, model.djiLog)
+        XCTAssertTrue(
+            model.djiProfiles.contains { $0.iccid == alternate.iccid && $0.isEnabled },
+            model.djiLog
+        )
+
+        try? await Task.sleep(for: .seconds(10))
+        if let originalNow = model.djiProfiles.first(where: { $0.iccid == original.iccid }),
+           !originalNow.isEnabled {
+            model.switchDJIProfile(originalNow)
+            let originalFinished = await waitForDJIProfileOperation(model)
+            XCTAssertTrue(originalFinished, model.djiLog)
+        }
+
+        XCTAssertTrue(
+            model.djiProfiles.contains { $0.iccid == original.iccid && $0.isEnabled },
+            model.djiLog
+        )
+        XCTAssertTrue(model.djiLog.contains("Active eSIM"), model.djiLog)
+    }
+
+    func testDJIATClientTerminatesHungHelper() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("r6c-dji-at-timeout-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let helper = directory.appendingPathComponent("dji-at-helper")
+        try "#!/bin/sh\nexec /bin/sleep 30\n"
+            .write(to: helper, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
+
+        let client = DJIATClient(helperPath: helper.path)
+        let started = Date()
+        let result = await client.run(["raw", "AT+QCCID"], timeout: 0.2)
+
+        XCTAssertEqual(result.exitCode, 124)
+        XCTAssertTrue(result.output.contains("timed out"))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2)
+    }
+
+    @MainActor
+    private func waitForDJIProfileOperation(
+        _ model: AppModel,
+        timeout: TimeInterval = 240
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while model.djiProfileInFlight, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        return !model.djiProfileInFlight
+    }
+
+    func testHelperUsesLocalADBWhenSSHHostIsEmpty() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("r6c-local-adb-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let fakeADB = directory.appendingPathComponent("adb")
+        try """
+        #!/bin/sh
+        printf 'List of devices attached\\nlocal123 device product:grus model:MI_9_SE device:grus\\n'
+        """.write(to: fakeADB, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeADB.path)
+
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = [repository.appendingPathComponent("Scripts/r6c-phone-control.sh").path, "devices"]
+        process.environment = ProcessInfo.processInfo.environment.merging([
+            "R6C_ADB": fakeADB.path,
+            "R6C_SSH_HOST": ""
+        ]) { _, new in new }
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+
+        let text = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        XCTAssertEqual(process.terminationStatus, 0, text)
+        XCTAssertTrue(text.contains(#"DEVICE serial="local123" state="device" model="MI_9_SE""#), text)
+    }
+
+    func testRedactsActivationCodesFromLogs() {
+        let redacted = SensitiveLogRedactor.redact(#"{"activationCode":"LPA:1$server.example$SECRET123456789012345","matchingId":"SECRET123456789012345"} LPA:1$server.example$SECRET123456789012345"#)
+
+        XCTAssertFalse(redacted.contains("SECRET123456789012345"))
+        XCTAssertTrue(redacted.contains(#""activationCode":"[REDACTED]""#))
+        XCTAssertTrue(redacted.contains(#""matchingId":"[REDACTED]""#))
+    }
+
+    func testRedactsFormattedJSONAndFullICCIDFromLogs() {
+        let redacted = SensitiveLogRedactor.redact("""
+        {
+          "activationCode" : "ACTIVATION-SECRET",
+          "matchingId" : "MATCHING-SECRET",
+          "iccid" : "8985207220082439520"
+        }
+        +QCCID: 8985207220082439520F
+        """)
+
+        XCTAssertFalse(redacted.contains("ACTIVATION-SECRET"))
+        XCTAssertFalse(redacted.contains("MATCHING-SECRET"))
+        XCTAssertFalse(redacted.contains("8985207220082439520"))
+        XCTAssertTrue(redacted.contains(#""activationCode":"[REDACTED]""#))
+        XCTAssertTrue(redacted.contains(#""matchingId":"[REDACTED]""#))
+        XCTAssertTrue(redacted.contains("+QCCID: [REDACTED]"))
+    }
+
     func testParsesDeviceLines() {
         let devices = R6CLineParser.devices(#"DEVICE serial="demo123" state="device" model="Mi_10" product="umi" device="umi""#)
 
@@ -14,11 +147,43 @@ final class LineParserTests: XCTestCase {
         XCTAssertTrue(devices[0].isReady)
     }
 
+    func testStatusFieldsParsePhoneState() {
+        let fields = R6CLineParser.statusFields("""
+        adb=connected
+        battery=100% full
+        mobile_data=on
+        wifi=off
+        bluetooth=on
+        carrier=中国移动
+        network=LTE disconnected; default=none
+        """)
+
+        XCTAssertEqual(fields["battery"], "100% full")
+        XCTAssertEqual(fields["mobile_data"], "on")
+        XCTAssertEqual(fields["wifi"], "off")
+        XCTAssertEqual(fields["bluetooth"], "on")
+        XCTAssertEqual(fields["carrier"], "中国移动")
+        XCTAssertEqual(fields["network"], "LTE disconnected; default=none")
+    }
+
     func testMarksUnauthorizedDevicesAsNotReady() {
         let devices = R6CLineParser.devices(#"DEVICE serial="bad" state="unauthorized" model="" product="" device="""#)
 
         XCTAssertEqual(devices.count, 1)
         XCTAssertFalse(devices[0].isReady)
+    }
+
+    func testParsesPhoneMessages() {
+        let messages = R6CLineParser.messages("""
+        SMS\t1719662400000\t+85212345678\t1\thello from inbox
+        SMS\t1719662500000\t10086\t2\tsent body
+        """)
+
+        XCTAssertEqual(messages.count, 2)
+        XCTAssertEqual(messages[0].address, "+85212345678")
+        XCTAssertEqual(messages[0].typeLabel, "Inbox")
+        XCTAssertEqual(messages[0].body, "hello from inbox")
+        XCTAssertEqual(messages[1].typeLabel, "Sent")
     }
 
     func testParsesProfileLines() {
@@ -31,6 +196,27 @@ final class LineParserTests: XCTestCase {
         XCTAssertEqual(profiles.map(\.iccid), ["8985201111111111111", "8985202222222222222"])
         XCTAssertFalse(profiles[0].isEnabled)
         XCTAssertTrue(profiles[1].isEnabled)
+    }
+
+    func testParsesRealProfileLinesWithCRLFAndClassField() {
+        let profiles = R6CLineParser.profiles("PROFILE name=\"mother\" state=\"已禁用\" provider=\"Club\" iccid=\"8985200014631312207\" class=\"Operational\"\r\nPROFILE name=\"WEBBING\" state=\"已启用\" provider=\"Saily\" iccid=\"89852351225047364845\" class=\"Operational\"\r\n")
+
+        XCTAssertEqual(profiles.map(\.name), ["mother", "WEBBING"])
+        XCTAssertEqual(profiles.map(\.provider), ["Club", "Saily"])
+        XCTAssertEqual(profiles.map(\.iccid), ["8985200014631312207", "89852351225047364845"])
+        XCTAssertFalse(profiles[0].isEnabled)
+        XCTAssertTrue(profiles[1].isEnabled)
+    }
+
+    func testParsesProfileJSONUsingDisplayNameAndLocalizedState() {
+        let profiles = R6CLineParser.profilesJSON("""
+        [{"iccid":"8985200014631312207","state":"Disabled","name":"Club","nickName":"mother","displayName":"mother","provider":"Club","class":"Operational"},{"iccid":"89852351225047364845","state":"Enabled","name":"WEBBING","nickName":"","displayName":"WEBBING","provider":"Saily","class":"Operational"}]
+        """)
+
+        XCTAssertEqual(profiles.map(\.name), ["mother", "WEBBING"])
+        XCTAssertEqual(profiles.map(\.state), ["已禁用", "已启用"])
+        XCTAssertEqual(profiles.map(\.provider), ["Club", "Saily"])
+        XCTAssertEqual(profiles.map(\.iccid), ["8985200014631312207", "89852351225047364845"])
     }
 
     func testProfileSwitchArgumentsPreferIccid() {
@@ -149,6 +335,31 @@ final class LineParserTests: XCTestCase {
         XCTAssertEqual(portrait.height, 600, accuracy: 0.01)
         XCTAssertEqual(landscape.width, 600, accuracy: 0.01)
         XCTAssertEqual(landscape.height, 276.92, accuracy: 0.01)
+    }
+
+    func testDisplayStatusParsesPhysicalSize() {
+        let size = R6CLineParser.physicalDisplaySize("""
+        Physical size: 1080x2340
+        Physical density: 480
+        """)
+
+        XCTAssertEqual(size, CGSize(width: 1080, height: 2340))
+    }
+
+    func testCompressedVideoCoordinatesMapToDeviceTouchCoordinates() {
+        let point = ScreenCoordinateMapper.mapPoint(
+            CGPoint(x: 270, y: 585),
+            from: CGSize(width: 540, height: 1170),
+            to: CGSize(width: 1080, height: 2340)
+        )
+        let landscapeSize = ScreenCoordinateMapper.touchSize(
+            for: CGSize(width: 1170, height: 540),
+            deviceSize: CGSize(width: 1080, height: 2340)
+        )
+
+        XCTAssertEqual(point.x, 540, accuracy: 0.01)
+        XCTAssertEqual(point.y, 1170, accuracy: 0.01)
+        XCTAssertEqual(landscapeSize, CGSize(width: 2340, height: 1080))
     }
 
     func testTrackpadHorizontalSwipeFiresOncePerGesture() {
@@ -290,5 +501,331 @@ final class LineParserTests: XCTestCase {
         XCTAssertEqual(RemoteDraftValidator.error(host: "", port: "68"), "Enter a host.")
         XCTAssertEqual(RemoteDraftValidator.error(host: "203.0.113.10", port: "0"), "Port must be 1-65535.")
         XCTAssertEqual(RemoteDraftValidator.error(host: "203.0.113.10", port: "abc"), "Port must be 1-65535.")
+    }
+
+    func testParsesDJIIG830LiveStatus() {
+        let snapshot = DJIATResponseParser.snapshot(from: """
+        @@BEGIN IDENTITY
+        ATI
+        Baiwang
+        QDC507
+        Revision: QDC507GLEFM21
+        OK
+        @@END IDENTITY
+        @@BEGIN SIM_PIN
+        +CME ERROR: 10
+        @@END SIM_PIN
+        @@BEGIN SIM_STATE
+        +QSIMSTAT: 0,0
+        OK
+        @@END SIM_STATE
+        @@BEGIN OPERATOR
+        +COPS: 0
+        OK
+        @@END OPERATOR
+        @@BEGIN EPS_REGISTRATION
+        +CEREG: 0,2
+        OK
+        @@END EPS_REGISTRATION
+        @@BEGIN SIGNAL
+        +CSQ: 27,99
+        OK
+        @@END SIGNAL
+        @@BEGIN NETWORK_INFO
+        +QNWINFO: "FDD LTE","46000","LTE BAND 3",1300
+        OK
+        @@END NETWORK_INFO
+        @@BEGIN SERVING_CELL
+        +QENG: "servingcell","LIMSRV","LTE","FDD",460,00,C558C84,251,1300,3,5,5,2835,-96,-18,-58,-5,23
+        OK
+        @@END SERVING_CELL
+        @@BEGIN USB_MODE
+        +QCFG: "usbnet",0
+        OK
+        @@END USB_MODE
+        """)
+
+        XCTAssertTrue(snapshot.isConnected)
+        XCTAssertEqual(snapshot.manufacturer, "Baiwang")
+        XCTAssertEqual(snapshot.model, "QDC507")
+        XCTAssertEqual(snapshot.firmware, "QDC507GLEFM21")
+        XCTAssertEqual(snapshot.simState, .missing)
+        XCTAssertEqual(snapshot.registration, .searching)
+        XCTAssertEqual(snapshot.radioAccessTechnology, "LTE")
+        XCTAssertEqual(snapshot.duplexMode, "FDD")
+        XCTAssertEqual(snapshot.mccMnc, "460-00")
+        XCTAssertEqual(snapshot.cellID, "C558C84")
+        XCTAssertEqual(snapshot.pci, 251)
+        XCTAssertEqual(snapshot.earfcn, 1300)
+        XCTAssertEqual(snapshot.band, "B3")
+        XCTAssertEqual(snapshot.tac, "2835")
+        XCTAssertEqual(snapshot.rsrp, -96)
+        XCTAssertEqual(snapshot.rsrq, -18)
+        XCTAssertEqual(snapshot.rssi, -58)
+        XCTAssertEqual(snapshot.sinr, -5)
+        XCTAssertEqual(snapshot.csq, 27)
+        XCTAssertEqual(snapshot.usbMode, "RmNet")
+        XCTAssertEqual(snapshot.usbModeCode, 0)
+    }
+
+    func testDJIStatusMasksICCIDAndParsesOperator() {
+        let output = """
+        @@BEGIN ICCID
+        +QCCID: 89852342022508685731
+        OK
+        @@END ICCID
+        @@BEGIN SIM_PIN
+        +CPIN: READY
+        OK
+        @@END SIM_PIN
+        @@BEGIN SIM_STATE
+        +QSIMSTAT: 0,1
+        OK
+        @@END SIM_STATE
+        @@BEGIN OPERATOR
+        +COPS: 0,0,"CMCC",7
+        OK
+        @@END OPERATOR
+        @@BEGIN EPS_REGISTRATION
+        +CEREG: 0,5
+        OK
+        @@END EPS_REGISTRATION
+        """
+        let snapshot = DJIATResponseParser.snapshot(from: output)
+
+        XCTAssertEqual(snapshot.simState, .ready)
+        XCTAssertEqual(snapshot.maskedICCID, "898523...685731")
+        XCTAssertEqual(DJIATResponseParser.iccid(from: output), "89852342022508685731")
+        XCTAssertEqual(snapshot.operatorName, "CMCC")
+        XCTAssertEqual(snapshot.registration, .roaming)
+    }
+
+    func testDJIICCIDParserRejectsMalformedResponses() {
+        XCTAssertNil(DJIATResponseParser.iccid(from: """
+        @@BEGIN ICCID
+        +QCCID: unavailable
+        OK
+        @@END ICCID
+        """))
+    }
+
+    func testDJIICCIDParserStripsBCDPaddingNibble() {
+        let output = """
+        @@BEGIN ICCID
+        +QCCID: 8985207220082439520F
+        OK
+        @@END ICCID
+        """
+
+        XCTAssertEqual(DJIATResponseParser.iccid(from: output), "8985207220082439520")
+        XCTAssertEqual(DJIATResponseParser.snapshot(from: output).maskedICCID, "898520...439520")
+    }
+
+    func testDJIStatusIndicatorMatchesDocumentedStates() {
+        var snapshot = DJI4GSnapshot()
+        snapshot.isConnected = true
+
+        snapshot.simState = .missing
+        XCTAssertEqual(snapshot.statusIndicator, DJIStatusIndicator(color: .red, behavior: .steady))
+
+        snapshot.simState = .ready
+        snapshot.registration = .searching
+        XCTAssertEqual(snapshot.statusIndicator, DJIStatusIndicator(color: .red, behavior: .flashing))
+
+        snapshot.registration = .home
+        snapshot.radioAccessTechnology = "LTE"
+        snapshot.rsrp = -82
+        XCTAssertEqual(snapshot.statusIndicator, DJIStatusIndicator(color: .green, behavior: .steady))
+
+        snapshot.rsrp = -98
+        XCTAssertEqual(snapshot.statusIndicator, DJIStatusIndicator(color: .green, behavior: .flashing))
+
+        snapshot.radioAccessTechnology = "UMTS"
+        snapshot.rsrp = -82
+        XCTAssertEqual(snapshot.statusIndicator, DJIStatusIndicator(color: .blue, behavior: .steady))
+
+        snapshot.isConnected = false
+        XCTAssertEqual(snapshot.statusIndicator, .off)
+    }
+
+    func testDJILPACParserMapsProfilesWithoutExposingDriverEnvelope() {
+        let profiles = DJILPACResponseParser.profiles(from: """
+        {"type":"lpa","payload":{"code":0,"message":"success","data":[
+          {"iccid":"8985200014631312207","profileState":"disabled","profileNickname":null,"serviceProviderName":"Club","profileName":"Club"},
+          {"iccid":"89852351225047364845","isdpAid":"a0000005591010ffffffff8900001200","profileState":"enabled","profileNickname":"Travel","serviceProviderName":"Saily","profileName":"WEBBING"}
+        ]}}
+        """)
+
+        XCTAssertEqual(profiles.map(\.name), ["Club", "WEBBING"])
+        XCTAssertEqual(profiles.map(\.displayName), ["Club", "Travel"])
+        XCTAssertEqual(profiles[1].nickname, "Travel")
+        XCTAssertEqual(profiles.map(\.provider), ["Club", "Saily"])
+        XCTAssertEqual(profiles[1].isdpAid, "a0000005591010ffffffff8900001200")
+        XCTAssertFalse(profiles[0].isEnabled)
+        XCTAssertTrue(profiles[1].isEnabled)
+    }
+
+    func testDJILPACParserReadsCommandResult() {
+        let result = DJILPACResponseParser.result(from: """
+        {"type":"lpa","payload":{"code":0,"message":"success","data":{}}}
+        """)
+
+        XCTAssertEqual(result?.code, 0)
+        XCTAssertEqual(result?.message, "success")
+    }
+
+    func testDJILPACParserFallsBackWhenNicknameIsEmpty() {
+        let profiles = DJILPACResponseParser.profiles(from: """
+        {"type":"lpa","payload":{"code":0,"message":"success","data":[
+          {"iccid":"1","profileState":"enabled","profileNickname":"  ","serviceProviderName":"Demo","profileName":"Original"}
+        ]}}
+        """)
+
+        XCTAssertEqual(profiles.first?.name, "Original")
+        XCTAssertEqual(profiles.first?.displayName, "Original")
+        XCTAssertNil(profiles.first?.nickname)
+    }
+
+    func testParsesDJIDataVoiceAndLEDState() {
+        let snapshot = DJIATResponseParser.snapshot(from: """
+        @@BEGIN PDP_ADDRESS
+        +CGPADDR: 1,"10.49.17.199"
+        OK
+        @@END PDP_ADDRESS
+        @@BEGIN WWAN_STATUS
+        +QLWWANSTATUS: 1,"10.49.17.199","0000:0000:0000:0000:0000:0000:0000:0000"
+        OK
+        @@END WWAN_STATUS
+        @@BEGIN NETDEV_STATUS
+        +QNETDEVSTATUS: 0,2,4,1
+        OK
+        @@END NETDEV_STATUS
+        @@BEGIN IMS_CONFIG
+        +QCFG: "ims",0,0
+        OK
+        @@END IMS_CONFIG
+        @@BEGIN VOLTE_CONFIG
+        +QCFG: "volte/disable",0
+        OK
+        @@END VOLTE_CONFIG
+        @@BEGIN CALL_CONTROL
+        +QCFG: "call_control",0,0
+        OK
+        @@END CALL_CONTROL
+        @@BEGIN PHONE_NUMBER
+        AT+CNUM
+        OK
+        @@END PHONE_NUMBER
+        @@BEGIN LED_MODE
+        +QCFG: "ledmode",0
+        OK
+        @@END LED_MODE
+        @@BEGIN USB_MODE
+        +QCFG: "usbnet",1
+        OK
+        @@END USB_MODE
+        """)
+
+        XCTAssertEqual(snapshot.pdpAddress, "10.49.17.199")
+        XCTAssertTrue(snapshot.hasDataSession)
+        XCTAssertEqual(snapshot.usbNetworkState, "Connected")
+        XCTAssertEqual(snapshot.imsState, "Disabled")
+        XCTAssertEqual(snapshot.volteState, "Enabled")
+        XCTAssertEqual(snapshot.callControlState, "0 · 0")
+        XCTAssertNil(snapshot.phoneNumber)
+        XCTAssertEqual(snapshot.ledMode, "Firmware mode 0")
+        XCTAssertEqual(snapshot.usbMode, "ECM")
+        XCTAssertEqual(snapshot.usbModeCode, 1)
+        XCTAssertFalse(snapshot.voiceReady)
+    }
+
+    func testDJIDataSessionRequiresANonzeroPDPAddress() {
+        let snapshot = DJIATResponseParser.snapshot(from: """
+        @@BEGIN PDP_ADDRESS
+        +CGPADDR: 1,"10.196.137.114"
+        OK
+        @@END PDP_ADDRESS
+        @@BEGIN WWAN_STATUS
+        +QLWWANSTATUS: 1,"0.0.0.0","0000:0000:0000:0000:0000:0000:0000:0000"
+        OK
+        @@END WWAN_STATUS
+        @@BEGIN NETDEV_STATUS
+        +QNETDEVSTATUS: 0,2,4,1
+        OK
+        @@END NETDEV_STATUS
+        """)
+
+        XCTAssertEqual(snapshot.usbNetworkState, "Connected")
+        XCTAssertFalse(snapshot.hasDataSession)
+    }
+
+    func testServingCellDoesNotEraseRoamingRegistration() {
+        let snapshot = DJIATResponseParser.snapshot(from: """
+        @@BEGIN EPS_REGISTRATION
+        +CEREG: 0,5
+        OK
+        @@END EPS_REGISTRATION
+        @@BEGIN SERVING_CELL
+        +QENG: "servingcell","NOCONN","LTE","FDD",460,01,7A51F30,213,1850,3,5,5,7A44,-82,-4,-51,3,39
+        OK
+        @@END SERVING_CELL
+        """)
+
+        XCTAssertEqual(snapshot.registration, .roaming)
+    }
+
+    func testDJIRawCommandRequiresModemOK() {
+        XCTAssertTrue(DJIATResponseParser.commandSucceeded("""
+        @@BEGIN RAW
+        AT+QCFG="usbnet",1
+        OK
+        @@END RAW
+        """))
+        XCTAssertFalse(DJIATResponseParser.commandSucceeded("""
+        @@BEGIN RAW
+        AT+QCFG="usbnet",1
+        ERROR
+        @@END RAW
+        """))
+    }
+
+    func testParsesDJIHostNetworkState() {
+        let snapshot = DJIHostNetworkParser.snapshot(
+            hardwarePorts: """
+            Hardware Port: Wi-Fi
+            Device: en0
+            Hardware Port: Baiwang
+            Device: en12
+            """,
+            networkInfo: """
+            DHCP Configuration
+            IP address: 192.168.225.23
+            Router: 192.168.225.1
+            """,
+            dnsInfo: "1.1.1.1\n8.8.8.8\n"
+        )
+
+        XCTAssertEqual(snapshot.interfaceName, "en12")
+        XCTAssertEqual(snapshot.ipv4Address, "192.168.225.23")
+        XCTAssertEqual(snapshot.router, "192.168.225.1")
+        XCTAssertEqual(snapshot.dnsServers, ["1.1.1.1", "8.8.8.8"])
+        XCTAssertTrue(snapshot.isReady)
+    }
+
+    func testParsesDJINeighborCells() {
+        let neighbors = DJIATResponseParser.neighborCells(from: """
+        @@BEGIN NEIGHBOR_CELLS
+        +QENG: "neighbourcell intra","LTE",1300,153,-12,-103,-72,4,0,21,8
+        +QENG: "neighbourcell inter","LTE",1650,42,-15,-111,-80,-3,0,14,4
+        OK
+        @@END NEIGHBOR_CELLS
+        """)
+
+        XCTAssertEqual(neighbors.count, 2)
+        XCTAssertEqual(neighbors[0].kind, "intra")
+        XCTAssertEqual(neighbors[0].earfcn, 1300)
+        XCTAssertEqual(neighbors[0].pci, 153)
+        XCTAssertEqual(neighbors[0].rsrp, -103)
+        XCTAssertEqual(neighbors[1].kind, "inter")
     }
 }
